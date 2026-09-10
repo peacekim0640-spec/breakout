@@ -292,12 +292,13 @@ function draw(){
     b.trail.forEach((t, i) => { ctx.globalAlpha = (i+1) / b.trail.length * .25; ctx.fillStyle = COL.brass2; ctx.beginPath(); ctx.arc(t[0], t[1], b.r * (i+1)/b.trail.length, 0, Math.PI*2); ctx.fill(); });
     ctx.globalAlpha = 1; ctx.fillStyle = slow ? COL.slate : COL.ink; ctx.shadowColor = COL.brass2; ctx.shadowBlur = 12;
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
-    if (b.stuck && G.state === "play") { ctx.fillStyle = COL.ink; ctx.globalAlpha = .5 + .5*Math.sin(performance.now()/250); ctx.font = "11px " + getComputedStyle(document.body).fontFamily; ctx.textAlign = "center"; ctx.fillText(matchMedia("(pointer:coarse)").matches ? "짧게 탭해서 발사" : "클릭 또는 SPACE로 발사", W/2, p.y + 34); ctx.globalAlpha = 1; }
+    if (b.stuck && G.state === "play") { ctx.fillStyle = COL.ink; ctx.globalAlpha = .5 + .5*Math.sin(performance.now()/250); ctx.font = "11px " + getComputedStyle(document.body).fontFamily; ctx.textAlign = "center"; ctx.font = "13px " + getComputedStyle(document.body).fontFamily; ctx.fillText(matchMedia("(pointer:coarse)").matches ? "판을 끌어 움직이고, 탭하면 발사" : "마우스로 움직이고, 클릭 또는 SPACE로 발사", W/2, p.y + 34); ctx.globalAlpha = 1; }
   }
   ctx.restore();
 }
 
 buildLevel(0); serve(); hud();
+G.state = "play"; veil.hidden = true; // 링크를 열면 바로 게임판. 첫 탭이 발사.
 requestAnimationFrame(loop);
 </script>
 </body>
