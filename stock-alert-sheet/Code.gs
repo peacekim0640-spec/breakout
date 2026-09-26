@@ -10,6 +10,17 @@
 var SHEET_SETTINGS = '설정';
 var SHEET_WATCH = '관심종목';
 var SHEET_BREADTH = '시장폭';
+var SHEET_INDICATORS = '시장지표';
+var SHEET_QUOTES = '_시세'; // GOOGLEFINANCE 계산용 숨김 시트
+
+var INDICATOR_HEADERS = ['날짜', 'VIX', '원/달러', '코스피 개인(억)', '코스피 외국인(억)', '코스피 기관(억)',
+  '예탁금 기준일', '고객예탁금(억)', '신용잔고(억)', '비고'];
+
+// 스크립트는 GOOGLEFINANCE 를 직접 부를 수 없어서, 숨김 시트에 수식을 두고 값을 읽는다
+var QUOTE_ROWS = [
+  ['VIX', '=GOOGLEFINANCE("INDEXCBOE:VIX","price")'],
+  ['원/달러', '=GOOGLEFINANCE("CURRENCY:USDKRW")']
+];
 
 var WATCH_HEADERS = ['시장', '종목코드', '종목명', '현재가', '등락률(%)', '목표가', '손절가', '급등락 기준(%)', '상태', '마지막 알림'];
 var COL = { market: 0, code: 1, name: 2, price: 3, change: 4, target: 5, stop: 6, swing: 7, status: 8, lastAlert: 9 };
@@ -37,7 +48,8 @@ function onOpen() {
     .addItem('처음 설정하기', 'setup')
     .addSeparator()
     .addItem('지금 관심종목 확인', 'checkWatchlistNow')
-    .addItem('지금 시장폭 기록', 'logBreadth')
+    .addItem('지금 시장폭 기록', 'logBreadthNow')
+    .addItem('지금 시장지표 기록', 'logIndicatorsNow')
     .addItem('텔레그램 테스트 메시지', 'sendTestMessage')
     .addSeparator()
     .addItem('자동 실행 켜기', 'installTriggers')
@@ -80,6 +92,20 @@ function setup() {
     breadth.setFrozenRows(1);
   }
 
+  var indicators = ss.getSheetByName(SHEET_INDICATORS);
+  if (!indicators) {
+    indicators = ss.insertSheet(SHEET_INDICATORS);
+    indicators.getRange(1, 1, 1, INDICATOR_HEADERS.length).setValues([INDICATOR_HEADERS]).setFontWeight('bold');
+    indicators.setFrozenRows(1);
+  }
+
+  var quotes = ss.getSheetByName(SHEET_QUOTES);
+  if (!quotes) {
+    quotes = ss.insertSheet(SHEET_QUOTES);
+    quotes.getRange(1, 1, QUOTE_ROWS.length, 2).setValues(QUOTE_ROWS);
+    quotes.hideSheet();
+  }
+
   SpreadsheetApp.getUi().alert(
     '설정 완료!\n\n' +
     '1) [설정] 시트에 텔레그램 봇 토큰과 채팅 ID를 입력하세요.\n' +
@@ -109,14 +135,15 @@ function fillWatchFormulas_(sheet, lastRow) {
 function installTriggers() {
   removeTriggers(true);
   ScriptApp.newTrigger('checkWatchlist').timeBased().everyMinutes(10).create();
-  ScriptApp.newTrigger('logBreadth').timeBased().everyDays(1).atHour(16).inTimezone(TZ).create();
-  SpreadsheetApp.getUi().alert('자동 실행을 켰습니다.\n\n· 관심종목: 장중(평일 09:00~15:30) 10분마다 확인\n· 시장폭: 평일 오후 4시쯤 하루 1번 기록');
+  ScriptApp.newTrigger('dailyLog').timeBased().everyDays(1).atHour(16).inTimezone(TZ).create();
+  SpreadsheetApp.getUi().alert('자동 실행을 켰습니다.\n\n· 관심종목: 장중(평일 09:00~15:30) 10분마다 확인\n· 시장폭·시장지표: 평일 오후 4시쯤 하루 1번 기록');
 }
 
 function removeTriggers(silent) {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     var fn = t.getHandlerFunction();
-    if (fn === 'checkWatchlist' || fn === 'logBreadth') ScriptApp.deleteTrigger(t);
+    // logBreadth 는 이전 버전의 트리거 이름
+    if (fn === 'checkWatchlist' || fn === 'dailyLog' || fn === 'logBreadth') ScriptApp.deleteTrigger(t);
   });
   if (silent !== true) SpreadsheetApp.getUi().alert('자동 실행을 껐습니다.');
 }
@@ -208,29 +235,61 @@ function evaluateStock(stock) {
   return hits;
 }
 
+// ─────────────────────────────── 매일 기록 ───────────────────────────────
+
+/** 트리거용: 평일 오후에 시장폭과 시장지표를 함께 기록한다. */
+function dailyLog() {
+  var day = Number(Utilities.formatDate(new Date(), TZ, 'u')); // 1=월 … 7=일
+  if (day >= 6) return;
+  runBreadth_();
+  runIndicators_();
+}
+
+/** 이전 버전에서 설치한 트리거가 이 이름을 부르므로 남겨 둔다. */
+function logBreadth() {
+  dailyLog();
+}
+
+function logBreadthNow() {
+  var failed = runBreadth_();
+  SpreadsheetApp.getActiveSpreadsheet().toast(failed.length ? '일부 실패: ' + failed.join(' / ') : '기록 완료', '시장폭', 8);
+}
+
+function logIndicatorsNow() {
+  var failed = runIndicators_();
+  SpreadsheetApp.getActiveSpreadsheet().toast(failed.length ? '일부 실패: ' + failed.join(' / ') : '기록 완료', '시장지표', 8);
+}
+
+/** 네이버 금융 페이지를 EUC-KR 로 읽어 HTML 문자열을 돌려준다. 실패하면 예외. */
+function fetchNaver_(path) {
+  var res = UrlFetchApp.fetch('https://finance.naver.com' + path, {
+    muteHttpExceptions: true,
+    headers: { 'User-Agent': 'Mozilla/5.0' }
+  });
+  if (res.getResponseCode() !== 200) throw new Error('HTTP ' + res.getResponseCode());
+  return res.getContentText('EUC-KR');
+}
+
+function sheetOrThrow_(name) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  if (!sheet) throw new Error('[' + name + '] 시트가 없습니다. 메뉴 → 처음 설정하기 를 먼저 실행하세요.');
+  return sheet;
+}
+
 // ─────────────────────────────── 시장폭 ───────────────────────────────
 
-/** 코스피·코스닥 상승/보합/하락 종목 수를 [시장폭] 시트에 기록하고, 코스피 상승비율이 극단이면 알린다. */
-function logBreadth() {
-  var nowDate = new Date();
-  var day = Number(Utilities.formatDate(nowDate, TZ, 'u')); // 1=월 … 7=일
-  var isTrigger = !isInteractive_();
-  if (isTrigger && day >= 6) return; // 주말에는 자동 기록하지 않음
-
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(SHEET_BREADTH);
-  if (!sheet) throw new Error('[시장폭] 시트가 없습니다. 메뉴 → 처음 설정하기 를 먼저 실행하세요.');
+/**
+ * 코스피·코스닥 상승/보합/하락 종목 수를 [시장폭] 시트에 기록하고, 코스피 상승비율이 극단이면 알린다.
+ * @return {string[]} 실패한 항목 설명
+ */
+function runBreadth_() {
+  var sheet = sheetOrThrow_(SHEET_BREADTH);
   var settings = readSettings_();
-  var today = Utilities.formatDate(nowDate, TZ, 'yyyy-MM-dd');
+  var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
 
   var results = BREADTH_MARKETS.map(function (m) {
     try {
-      var res = UrlFetchApp.fetch('https://finance.naver.com/sise/sise_index.naver?code=' + m.code, {
-        muteHttpExceptions: true,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      });
-      if (res.getResponseCode() !== 200) return { market: m, error: 'HTTP ' + res.getResponseCode() };
-      var counts = parseBreadth(res.getContentText('EUC-KR'), m.sosok);
+      var counts = parseBreadth(fetchNaver_('/sise/sise_index.naver?code=' + m.code), m.sosok);
       return counts ? { market: m, counts: counts } : { market: m, error: '페이지에서 종목 수를 찾지 못함 (네이버 화면 구조 변경 가능성)' };
     } catch (e) {
       return { market: m, error: String(e.message || e) };
@@ -254,10 +313,7 @@ function logBreadth() {
     if (msg && props.getProperty(key) !== today && sendTelegram_(settings, msg)) props.setProperty(key, today);
   }
 
-  if (!isTrigger) {
-    var failed = results.filter(function (r) { return !r.counts; });
-    ss.toast(failed.length ? '일부 실패: ' + failed.map(function (r) { return r.market.name + ' - ' + r.error; }).join(' / ') : '기록 완료', '시장폭', 8);
-  }
+  return results.filter(function (r) { return !r.counts; }).map(function (r) { return r.market.name + ' - ' + r.error; });
 }
 
 /**
@@ -296,6 +352,106 @@ function breadthAlertMessage(counts, high, low) {
   if (high !== null && counts.ratio >= high) return '🔥 코스피 시장폭 과열\n' + body + '\n기준 ' + high + '% 이상';
   if (low !== null && counts.ratio <= low) return '🧊 코스피 시장폭 급랭\n' + body + '\n기준 ' + low + '% 이하';
   return null;
+}
+
+// ─────────────────────────────── 시장지표 ───────────────────────────────
+
+/**
+ * 심리(VIX)·환율·수급(코스피 투자자별 순매수)·유동성(고객예탁금, 신용잔고)을 [시장지표] 시트에 한 줄로 기록한다.
+ * 항목별로 따로 가져오므로 하나가 실패해도 나머지는 기록된다.
+ * @return {string[]} 실패한 항목 설명
+ */
+function runIndicators_() {
+  var sheet = sheetOrThrow_(SHEET_INDICATORS);
+  var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+  var failed = [];
+
+  var quotes = readQuotes_();
+  ['VIX', '원/달러'].forEach(function (k) {
+    if (quotes[k] === null) failed.push(k + ' - 구글 시세 없음');
+  });
+
+  var flow = null;
+  try {
+    flow = parseInvestorFlow(fetchNaver_('/sise/sise_index.naver?code=KOSPI'));
+    if (!flow) failed.push('수급 - 페이지에서 개인/외국인/기관 금액을 찾지 못함');
+  } catch (e) {
+    failed.push('수급 - ' + (e.message || e));
+  }
+
+  var deposit = null;
+  try {
+    deposit = parseDeposit(fetchNaver_('/sise/sise_deposit.naver'));
+    if (!deposit) failed.push('예탁금 - 페이지에서 표를 찾지 못함');
+  } catch (e) {
+    failed.push('예탁금 - ' + (e.message || e));
+  }
+
+  sheet.appendRow([
+    today,
+    blankIfNull(quotes['VIX']),
+    blankIfNull(quotes['원/달러']),
+    flow ? flow.individual : '',
+    flow ? flow.foreign : '',
+    flow ? flow.institution : '',
+    deposit ? deposit.date : '',
+    deposit ? deposit.customerDeposit : '',
+    deposit ? deposit.creditBalance : '',
+    failed.length ? '실패: ' + failed.join(' / ') : ''
+  ]);
+  return failed;
+}
+
+/** 숨김 [_시세] 시트의 GOOGLEFINANCE 값을 {이름: 숫자|null} 로 읽는다. */
+function readQuotes_() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_QUOTES);
+  var out = {};
+  QUOTE_ROWS.forEach(function (r) { out[r[0]] = null; });
+  if (!sheet) return out;
+  SpreadsheetApp.flush();
+  sheet.getRange(1, 1, QUOTE_ROWS.length, 2).getValues().forEach(function (r) {
+    out[r[0]] = toNumber(r[1]);
+  });
+  return out;
+}
+
+/**
+ * 네이버 금융 지수 페이지에서 투자자별 순매수(억원)를 읽는다. (순수 함수 — 테스트 가능)
+ * 예: "개인 +1,234억 외국인 -567억 기관 -890억"
+ * @return {{individual: number, foreign: number, institution: number} | null}
+ */
+function parseInvestorFlow(html) {
+  var text = htmlToText(html);
+  function amount(label) {
+    var m = text.match(new RegExp(label + '\\s*([+\\-]?\\s*\\d[\\d,]*)\\s*억'));
+    return m ? Number(m[1].replace(/[\s,]/g, '')) : null;
+  }
+  var individual = amount('개인');
+  var foreign = amount('외국인');
+  var institution = amount('기관계?');
+  if (individual === null || foreign === null || institution === null) return null;
+  return { individual: individual, foreign: foreign, institution: institution };
+}
+
+/**
+ * 네이버 금융 증시자금동향 페이지에서 가장 최근 날짜의 고객예탁금·신용잔고(억원)를 읽는다. (순수 함수 — 테스트 가능)
+ * 표의 열 순서: 날짜 | 고객예탁금 | 증감 | 신용잔고 | 증감 | …
+ * @return {{date: string, customerDeposit: number, creditBalance: number} | null}
+ */
+function parseDeposit(html) {
+  var text = htmlToText(html);
+  var m = text.match(/(\d{2}\.\d{2}\.\d{2})\s+([\d,]+)\s+([+\-]?[\d,]+)\s+([\d,]+)/);
+  if (!m) return null;
+  var num = function (s) { return Number(s.replace(/,/g, '')); };
+  return { date: '20' + m[1].replace(/\./g, '-'), customerDeposit: num(m[2]), creditBalance: num(m[4]) };
+}
+
+/** HTML 태그를 지우고 공백을 하나로 줄인다. */
+function htmlToText(html) {
+  return html.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ');
 }
 
 // ─────────────────────────────── 텔레그램 ───────────────────────────────
@@ -340,19 +496,14 @@ function isMarketOpen(date) {
   return day <= 5 && hm >= 900 && hm <= 1530;
 }
 
-function isInteractive_() {
-  try {
-    SpreadsheetApp.getUi();
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
 function toNumber(v) {
   if (v === '' || v === null || v === undefined) return null;
   var n = typeof v === 'number' ? v : Number(String(v).replace(/,/g, ''));
   return isNaN(n) ? null : n;
+}
+
+function blankIfNull(v) {
+  return v === null ? '' : v;
 }
 
 function formatNumber(n) {

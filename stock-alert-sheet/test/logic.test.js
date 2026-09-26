@@ -82,6 +82,29 @@ test('시장폭 알림 기준', () => {
   assert.strictEqual(ctx.breadthAlertMessage({ up: 500, flat: 0, down: 500, ratio: 50 }, 70, 30), null);
 });
 
+// ── parseInvestorFlow ──
+test('투자자별 순매수 파싱', () => {
+  const page = '<dl><dt>개인</dt><dd><span class="num">+1,234</span>억</dd>' +
+    '<dt>외국인</dt><dd>-567억</dd><dt>기관계</dt><dd>- 890 억</dd></dl><a>개인정보처리방침</a>';
+  same(ctx.parseInvestorFlow(page), { individual: 1234, foreign: -567, institution: -890 });
+});
+
+test('투자자별 순매수 없으면 null', () => {
+  assert.strictEqual(ctx.parseInvestorFlow('<p>개인정보처리방침</p>'), null);
+});
+
+// ── parseDeposit ──
+test('고객예탁금·신용잔고 파싱 (가장 최근 행)', () => {
+  const page = `<table><tr><th>날짜</th><th>고객예탁금</th><th>증감</th><th>신용잔고</th></tr>
+    <tr><td>26.09.24</td><td>612,345</td><td>-1,203</td><td>201,987</td><td>+55</td></tr>
+    <tr><td>26.09.23</td><td>613,548</td><td>+900</td><td>201,932</td><td>-12</td></tr></table>`;
+  same(ctx.parseDeposit(page), { date: '2026-09-24', customerDeposit: 612345, creditBalance: 201987 });
+});
+
+test('예탁금 표가 없으면 null', () => {
+  assert.strictEqual(ctx.parseDeposit('<html>점검 중</html>'), null);
+});
+
 // ── isMarketOpen (UTC 로 넣고 한국 시간으로 판정) ──
 test('장중 판정', () => {
   assert.strictEqual(ctx.isMarketOpen(new Date('2026-09-25T00:00:00Z')), true); // 금 09:00 KST
