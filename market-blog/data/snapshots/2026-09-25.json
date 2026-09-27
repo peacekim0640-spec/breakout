@@ -1,0 +1,15 @@
+{
+  "recorded_on": "2026-09-27",
+  "source": "Google Finance (GOOGLEFINANCE, 구글 시트 '📈 주식 대시보드')",
+  "note": "국내 증시는 추석 연휴로 9/24~25 휴장. 국내 종목은 9/23(수) 종가, 미국 지수·VIX·환율은 9/25(금) 기준.",
+  "indicators": [
+    {"category": "심리", "name": "VIX", "value": 14.87, "change_pct": -5.11, "as_of": "2026-09-25"},
+    {"category": "환율", "name": "원/달러", "value": 1355.2, "change_pct": null, "as_of": "2026-09-25"},
+    {"category": "해외", "name": "S&P500", "value": 7743.41, "change_pct": 0.51, "as_of": "2026-09-25"},
+    {"category": "해외", "name": "나스닥", "value": 27068.72, "change_pct": 0.48, "as_of": "2026-09-25"}
+  ],
+  "stocks": [
+    {"market": "KRX", "code": "005930", "name": "삼성전자", "price": 285500, "change_pct": 3.25, "as_of": "2026-09-23"},
+    {"market": "KRX", "code": "000660", "name": "SK하이닉스", "price": 1862000, "change_pct": 1.20, "as_of": "2026-09-23"}
+  ]
+}
